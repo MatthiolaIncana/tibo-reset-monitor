@@ -1,0 +1,8 @@
+{
+  "initialized": false,
+  "seen": [],
+  "source_status": {},
+  "last_keepalive": null,
+  "all_fail_count": 0,
+  "health_alert_sent": false
+}
