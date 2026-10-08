@@ -93,6 +93,33 @@ UPCOMING_PATTERNS = [
     r"\breset for (?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b",
 ]
 
+# 免费中文翻译：不使用 OpenAI / GPT API。
+# 优先请求无需 API Key 的网页翻译接口；失败时使用本地 reset 语义规则兜底。
+TRANSLATE_URL = "https://translate.googleapis.com/translate_a/single"
+TRANSLATION_CACHE = {}
+
+LOCAL_TRANSLATIONS = [
+    (r"\breset all propagated\b", "全部重置已完成并传播生效"),
+    (r"\busage limits? have been reset\b", "使用额度已重置"),
+    (r"\bhave now reset usage\b", "已经重置使用额度"),
+    (r"\ball reset for everyone\b", "已为所有人完成重置"),
+    (r"\breset button pressed\b", "已触发重置"),
+    (r"\breset confirmed\b", "已确认重置"),
+    (r"\bwe(?:'|’)ll reset\b", "我们会进行重置"),
+    (r"\bwe will reset\b", "我们将进行重置"),
+    (r"\breset landing tomorrow\b", "重置将在明天到来"),
+    (r"\breset landing today\b", "重置将在今天到来"),
+    (r"\bmore resets coming\b", "后续还会有更多重置"),
+    (r"\bor a reset\b", "或者进行一次重置"),
+    (r"\bi accept your vote\b", "我接受你的投票"),
+    (r"\bfour updates or a reset\.? or both\.?\b", "四项更新，或者一次重置，也可能两者都有"),
+    (r"\bpossible reset within\b", "可能会在这段时间内重置"),
+    (r"\belevated signal\b", "重置信号升高"),
+    (r"\busage limits?\b", "使用额度"),
+    (r"\bpropagated\b", "已传播生效"),
+    (r"\breset\b", "重置"),
+]
+
 
 def now_cn():
     return datetime.now(SHANGHAI)
@@ -104,6 +131,65 @@ def iso_now():
 
 def normalize(s: str) -> str:
     return re.sub(r"\s+", " ", s).strip()
+
+
+def local_translate(text: str) -> str:
+    out = text
+    changed = False
+    for pattern, replacement in LOCAL_TRANSLATIONS:
+        new = re.sub(pattern, replacement, out, flags=re.I)
+        if new != out:
+            changed = True
+            out = new
+    out = normalize(out)
+    if changed:
+        return out
+    return "（自动翻译暂时不可用，请参考上方英文原文）"
+
+
+def translate_to_chinese(text: str) -> str:
+    text = normalize(text)
+    if not text:
+        return ""
+
+    if text in TRANSLATION_CACHE:
+        return TRANSLATION_CACHE[text]
+
+    cjk_count = len(re.findall(r"[\u4e00-\u9fff]", text))
+    if cjk_count >= max(4, len(text) // 3):
+        TRANSLATION_CACHE[text] = text
+        return text
+
+    try:
+        resp = requests.get(
+            TRANSLATE_URL,
+            params={
+                "client": "gtx",
+                "sl": "auto",
+                "tl": "zh-CN",
+                "dt": "t",
+                "q": text,
+            },
+            headers={"User-Agent": "Mozilla/5.0 TiboResetMonitor/1.1"},
+            timeout=12,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        translated = "".join(
+            part[0]
+            for part in (data[0] or [])
+            if isinstance(part, list) and part and isinstance(part[0], str)
+        )
+        translated = normalize(translated)
+        if translated:
+            TRANSLATION_CACHE[text] = translated
+            return translated
+    except Exception as exc:
+        print(f"[WARN] translate failed: {exc}", file=sys.stderr)
+
+    translated = local_translate(text)
+    TRANSLATION_CACHE[text] = translated
+    return translated
 
 
 def stable_id(text: str) -> str:
@@ -313,11 +399,12 @@ def format_alert(items, status_transition=None):
             text = text[:517] + "..."
         lines.append(f"{idx}. {item['label']}")
         lines.append(f"来源：{item['source']}")
-        lines.append(f"内容：{text}")
+        lines.append(f"英文原文：{text}")
+        lines.append(f"中文翻译：{translate_to_chinese(text)}")
         lines.append(f"链接：{item['url']}")
         lines.append("")
 
-    lines.append("说明：本监控只使用网页抓取和本地关键词规则，不调用任何 AI / GPT 模型。")
+    lines.append("说明：监控与判断不调用 ChatGPT / Work / Codex / OpenAI API；中文翻译使用免费网页翻译接口，并有本地规则兜底。")
     return "\n".join(lines)
 
 
@@ -328,7 +415,8 @@ def format_test(candidate_count, source_count):
         f"已连接飞书，当前可访问 {source_count} 个监控源，初始化记录 {candidate_count} 条参考信号。\n"
         "历史内容不会重复推送；从现在起只提醒新出现的有效重置信号。\n"
         "监控频率：每 6 小时一次。\n"
-        "模型消耗：0（不调用 GPT / Work / Codex / AI API）。"
+        "GPT / Work / Codex 消耗：0。\n"
+        f"中文翻译：已启用。示例：{translate_to_chinese('Four updates or a reset. Or both.')}"
     )
 
 
